@@ -40,7 +40,7 @@ class InspectionPage extends StatefulWidget {
 
 class _InspectionPageState extends State<InspectionPage> {
   // FastAPI backend running on your Ubuntu computer.
-  static const String apiUrl = 'http://0.0.0.0:8000';
+  static const String apiUrl = 'http://127.0.0.1:8000';
 
   final ImagePicker _picker = ImagePicker();
 
