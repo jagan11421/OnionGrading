@@ -1,121 +1,489 @@
+
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+
+import 'camera_page.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(const OnionIQApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class OnionIQApp extends StatelessWidget {
+  const OnionIQApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Onion IQ',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.green,
+        ),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const InspectionPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class InspectionPage extends StatefulWidget {
+  const InspectionPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<InspectionPage> createState() => _InspectionPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _InspectionPageState extends State<InspectionPage> {
+  // FastAPI backend running on your Ubuntu computer.
+  static const String apiUrl = 'http://0.0.0.0:8000';
 
-  void _incrementCounter() {
+  final ImagePicker _picker = ImagePicker();
+
+  XFile? selectedImage;
+  Uint8List? imageBytes;
+
+  bool isLoading = false;
+  String? errorMessage;
+
+  /// Select an image from the gallery or file picker.
+  Future<void> pickImage() async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 95,
+      );
+
+      if (image == null) return;
+
+      final bytes = await image.readAsBytes();
+
+      if (!mounted) return;
+
+      setState(() {
+        selectedImage = image;
+        imageBytes = bytes;
+        errorMessage = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        errorMessage = 'Could not select image: $e';
+      });
+    }
+  }
+
+  /// Open the live camera screen and receive its captured image.
+  Future<void> captureFromCamera() async {
+    try {
+      final XFile? image = await Navigator.push<XFile>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const CameraPage(),
+        ),
+      );
+
+      if (image == null) return;
+
+      final bytes = await image.readAsBytes();
+
+      if (!mounted) return;
+
+      setState(() {
+        selectedImage = image;
+        imageBytes = bytes;
+        errorMessage = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        errorMessage = 'Could not capture image: $e';
+      });
+    }
+  }
+
+  /// Upload the chosen or captured image to the YOLOv8 backend.
+  Future<void> inspectImage() async {
+    if (selectedImage == null || imageBytes == null) {
+      setState(() {
+        errorMessage = 'Please select or capture an onion image first.';
+      });
+      return;
+    }
+
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      isLoading = true;
+      errorMessage = null;
+    });
+
+    try {
+      final uri = Uri.parse('$apiUrl/inspect');
+
+      final request = http.MultipartRequest('POST', uri);
+
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'file',
+          imageBytes!,
+          filename: selectedImage!.name,
+        ),
+      );
+
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(response.body);
+
+        if (decoded is! Map<String, dynamic>) {
+          throw Exception('Unexpected response format from the server.');
+        }
+
+        if (!mounted) return;
+
+        final Uint8List capturedBytes = imageBytes!;
+
+        setState(() {
+          isLoading = false;
+        });
+
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ResultsPage(
+              imageBytes: capturedBytes,
+              result: decoded,
+            ),
+          ),
+        );
+      } else {
+        throw Exception(
+          'Server returned ${response.statusCode}: ${response.body}',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        isLoading = false;
+        errorMessage =
+            'Inspection failed: $e\n\n'
+            'Check that your FastAPI backend is running '
+            'and accessible at $apiUrl.';
+      });
+    }
+  }
+
+  void clearImage() {
+    setState(() {
+      selectedImage = null;
+      imageBytes = null;
+      errorMessage = null;
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: const Text(
+          'Onion IQ',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        centerTitle: true,
       ),
       body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 700),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Icon(
+                  Icons.eco,
+                  size: 64,
+                  color: Colors.green,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Onion Quality Assessment',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Select an onion image or capture one with your camera '
+                  'to run AI detection.',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 28),
+
+                // Image preview.
+                Container(
+                  height: 300,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: imageBytes != null
+                      ? Image.memory(
+                          imageBytes!,
+                          fit: BoxFit.contain,
+                          width: double.infinity,
+                        )
+                      : const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.add_a_photo_outlined,
+                              size: 72,
+                              color: Colors.grey,
+                            ),
+                            SizedBox(height: 12),
+                            Text(
+                              'Your onion image will appear here',
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                ),
+
+                const SizedBox(height: 20),
+
+                // Gallery and camera actions.
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: isLoading ? null : pickImage,
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('Choose from Gallery'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: isLoading ? null : captureFromCamera,
+                      icon: const Icon(Icons.camera_alt_outlined),
+                      label: const Text('Capture Live Image'),
+                    ),
+                  ],
+                ),
+
+                if (selectedImage != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Selected: ${selectedImage!.name}',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  TextButton.icon(
+                    onPressed: isLoading ? null : clearImage,
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Remove image'),
+                  ),
+                ],
+
+                const SizedBox(height: 20),
+
+                // Run model inference.
+                FilledButton.icon(
+                  onPressed: isLoading || imageBytes == null
+                      ? null
+                      : inspectImage,
+                  icon: isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.search),
+                  label: Text(
+                    isLoading ? 'Inspecting Onion...' : 'Inspect Image',
+                  ),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                ),
+
+                if (errorMessage != null) ...[
+                  const SizedBox(height: 20),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.red.shade200),
+                    ),
+                    child: Text(
+                      errorMessage!,
+                      style: TextStyle(color: Colors.red.shade800),
+                    ),
+                  ),
+                ],
+              ],
             ),
-          ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+    );
+  }
+}
+
+// ------------------------------------------------------------
+// Results screen
+// ------------------------------------------------------------
+
+class ResultsPage extends StatelessWidget {
+  final Uint8List imageBytes;
+  final Map<String, dynamic> result;
+
+  const ResultsPage({
+    super.key,
+    required this.imageBytes,
+    required this.result,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final detections = result['detections'] is List
+        ? result['detections'] as List
+        : <dynamic>[];
+
+    final totalDetections =
+        result['total_detections'] ?? detections.length;
+
+    final imageWidth = result['image_width'];
+    final imageHeight = result['image_height'];
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Inspection Results'),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 700),
+          child: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.memory(
+                  imageBytes,
+                  height: 280,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    children: [
+                      const Text('Total detections'),
+                      const SizedBox(height: 8),
+                      Text(
+                        '$totalDetections',
+                        style: Theme.of(context)
+                            .textTheme
+                            .headlineLarge
+                            ?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green.shade700,
+                            ),
+                      ),
+                      if (imageWidth != null && imageHeight != null) ...[
+                        const SizedBox(height: 8),
+                        Text('Image size: $imageWidth × $imageHeight'),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+              Text(
+                'Detected onions / objects',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+
+              if (detections.isEmpty)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text(
+                      'No objects were detected in this image.',
+                    ),
+                  ),
+                )
+              else
+                ...detections.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final item = entry.value;
+
+                  if (item is! Map) {
+                    return const SizedBox.shrink();
+                  }
+
+                  final className =
+                      item['class_name']?.toString() ?? 'Unknown';
+
+                  final classId = item['class_id']?.toString() ?? '?';
+
+                  final confidence = item['confidence'];
+
+                  final confidenceValue = confidence is num
+                      ? confidence.toDouble()
+                      : double.tryParse('$confidence') ?? 0.0;
+
+                  return Card(
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        child: Text('${index + 1}'),
+                      ),
+                      title: Text('Class $className'),
+                      subtitle: Text('Class ID: $classId'),
+                      trailing: Text(
+                        '${(confidenceValue * 100).toStringAsFixed(1)}%',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+
+              const SizedBox(height: 16),
+              const Text(
+                'Note: A, B, C and D are the labels used by your current '
+                'training dataset. Their commercial quality meanings '
+                'should be verified before using them as official grades.',
+              ),
+
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('Inspect Another Onion'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
