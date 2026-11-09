@@ -1,4 +1,4 @@
-
+import 'screens/model_metrics_screen.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -197,6 +197,20 @@ class _InspectionPageState extends State<InspectionPage> {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: 'Model Performance',
+            icon: const Icon(Icons.analytics_outlined),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ModelMetricsScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Center(
         child: ConstrainedBox(
