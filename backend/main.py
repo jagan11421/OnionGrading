@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 from ultralytics import YOLO
-
+import json
 app = FastAPI(title="Onion Quality Assessment")
 
 app.add_middleware(
@@ -20,10 +20,38 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_PATH = BASE_DIR / "model" / "best.pt"
 
 
+
 if not MODEL_PATH.exists():
     raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
 
 model = YOLO(str(MODEL_PATH))
+
+# Evaluation metrics file
+METRICS_PATH = (
+    BASE_DIR / "model" / "evaluation" / "metrics.json"
+)
+
+
+@app.get("/model-metrics")
+def get_model_metrics():
+
+    if not METRICS_PATH.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Model evaluation metrics not found. Run evaluate.py first."
+        )
+
+    try:
+        with open(METRICS_PATH, "r") as file:
+            metrics = json.load(file)
+
+        return metrics
+
+    except (json.JSONDecodeError, OSError):
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to read model evaluation metrics."
+        )
 
 
 @app.get("/")

@@ -1,49 +1,50 @@
+
 from pathlib import Path
+import json
 from ultralytics import YOLO
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 DATA_YAML = BASE_DIR / "dataset" / "data.yaml"
+BEST_MODEL = (
+    BASE_DIR / "model" / "runs" /
+    "onion_grading" / "weights" / "best.pt"
+)
 
-# BEST_MODEL = (
-#     BASE_DIR / "model" / "runs" /
-#     "onion_grading" / "weights" / "best.pt"
-# )
+OUTPUT_DIR = BASE_DIR / "model" / "evaluation"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-model = YOLO("best.pt")
+model = YOLO(str(BEST_MODEL))
 
 metrics = model.val(
     data=str(DATA_YAML),
     split="test",
     imgsz=640,
-    conf=0.25
+    conf=0.25,
+    plots=True
 )
 
-precision = metrics.box.mp
-recall = metrics.box.mr
-map50 = metrics.box.map50
-map50_95 = metrics.box.map
+precision = float(metrics.box.mp)
+recall = float(metrics.box.mr)
+map50 = float(metrics.box.map50)
+map50_95 = float(metrics.box.map)
 
 f1 = (2 * precision * recall) / (precision + recall + 1e-9)
 
-# Detection-based accuracy (Jaccard-style)
-tp = metrics.box.nt_per_class.sum() if hasattr(metrics.box, "nt_per_class") else 0
+results = {
+    "model_name": "Onion IQ YOLOv8",
+    "model_version": "1.0",
+    "evaluation_dataset": "test",
+    "precision": round(precision * 100, 2),
+    "recall": round(recall * 100, 2),
+    "f1_score": round(f1 * 100, 2),
+    "map50": round(map50 * 100, 2),
+    "map50_95": round(map50_95 * 100, 2)
+}
 
-# Use confusion matrix for aggregate detection counts instead
-cm = metrics.confusion_matrix
-matrix = cm.matrix
+# Save evaluation results
+with open(OUTPUT_DIR / "metrics.json", "w") as file:
+    json.dump(results, file, indent=4)
 
-# Exclude background row/column
-tp_count = sum(matrix[i][i] for i in range(min(matrix.shape)))
-fp_count = sum(matrix[:, i].sum() - matrix[i][i] for i in range(matrix.shape[1] - 1))
-fn_count = sum(matrix[i, :].sum() - matrix[i][i] for i in range(matrix.shape[0] - 1))
-
-accuracy = tp_count / (tp_count + fp_count + fn_count + 1e-9)
-
-print("\n===== Onion IQ Evaluation =====")
-print(f"Accuracy (detection-based): {accuracy * 100:.2f}%")
-print(f"Precision: {precision * 100:.2f}%")
-print(f"Recall: {recall * 100:.2f}%")
-print(f"F1 Score: {f1 * 100:.2f}%")
-print(f"mAP50: {map50 * 100:.2f}%")
-print(f"mAP50-95: {map50_95 * 100:.2f}%")
+print("Evaluation metrics saved successfully!")
+print(json.dumps(results, indent=4))
